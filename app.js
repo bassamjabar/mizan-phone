@@ -152,6 +152,30 @@
     </header>`;
   }
 
+  /* ===== التثبيت كتطبيق كامل (بلا شريط المتصفح) =====
+     إذا انفتح من المتصفح (مو من التطبيق المثبّت): بطاقة فوق. بالأندرويد زر «ثبّت» يطلّع نافذة التثبيت الحقيقية،
+     وبالآيفون خطوات «إضافة إلى الشاشة الرئيسية» من سفاري. */
+  const standalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  let installEvt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installEvt = e;
+    render();
+  });
+  window.addEventListener('appinstalled', () => {
+    installEvt = null;
+    render();
+  });
+  function installCard() {
+    if (standalone() || demo || lsGet('mz_hide_install') === '1') return '';
+    if (installEvt)
+      return `<div class="install"><img src="icon-192.png" alt="" /><div class="grow"><b>ثبّت ميزان كتطبيق</b><small>ينفتح بلا متصفح، وزر الرجوع يمشي داخله</small></div><button class="btn" data-act="install">ثبّت</button></div>`;
+    if (isIOS)
+      return `<div class="install col"><b>حتى يصير تطبيق كامل بلا سفاري</b><small>دوس زر المشاركة (المربع بسهم لفوق) ← «إضافة إلى الشاشة الرئيسية» ← إضافة، وافتحه بعدها من أيقونته</small><button class="link" data-act="hide-install">تمام، لا تبين</button></div>`;
+    return `<div class="install col"><b>انت فاتحه من المتصفح</b><small>حتى يصير تطبيق كامل: بكروم دوس ⋮ ← <b>«تثبيت التطبيق»</b> (مو «إضافة إلى الشاشة الرئيسية»). وإذا عندك أيقونة قديمة تفتح المتصفح، شيلها.</small><button class="link" data-act="hide-install">تمام، لا تبين</button></div>`;
+  }
+
   function homeTab() {
     const s = state.snap;
     const d = day();
@@ -163,7 +187,7 @@
     if (s.odd) alerts.push(`<div class="alert bad"><span><b>${fmt(s.odd)}</b> أرقام غريبة (كميات أو أسعار خيالية). صلّحها من البرنامج: فحص الأرقام</span></div>`);
     if (s.stock?.soon?.length) alerts.push(`<button class="alert warn" data-go="stock">${ic('box')}<span><b>${fmt(s.stock.soon.length)}</b> دواء قربت تنتهي صلاحيته</span>${ic('chev')}</button>`);
     if (s.stock?.out_n) alerts.push(`<button class="alert warn" data-go="stock">${ic('box')}<span><b>${fmt(s.stock.out_n)}</b> دواء خلص من المخزن</span>${ic('chev')}</button>`);
-    return `
+    return `${installCard()}
       <button class="hero" data-go="invoices">
         <small>مبيعات ${state.day === 'today' ? 'اليوم' : 'أمس'}</small>
         <b class="num">${fmt(d.sales)}<em>د.ع</em></b>
@@ -472,6 +496,12 @@
     const b = e.target.closest('[data-tab],[data-day],[data-act],[data-sheet],[data-go],[data-openday]');
     if (!b) return;
     if (b.dataset.act === 'refresh') return void load();
+    if (b.dataset.act === 'install' && installEvt) {
+      installEvt.prompt();
+      installEvt.userChoice.finally(() => ((installEvt = null), render()));
+      return undefined;
+    }
+    if (b.dataset.act === 'hide-install') return void (lsSet('mz_hide_install', '1'), render());
     // السد والرجوع بنفس طريق زر الرجوع حتى التاريخ يبقى مضبوط
     if (b.dataset.act === 'close') return void (state.sheets.length ? history.go(-state.sheets.length) : null);
     if (b.dataset.act === 'back') return void history.back();
