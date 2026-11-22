@@ -442,17 +442,50 @@
     }
   }
 
+  /* ===== زر الرجوع (أندرويد والسحب بالآيفون) مثل التطبيقات =====
+     كل تبويب أو نافذة تفاصيل تنفتح تنحط بتاريخ المتصفح، فالرجوع يسد آخر نافذة أو يرجع للتبويب القبله،
+     وما يطلع من التطبيق إلا من الملخص الرئيسي. */
+  const snapView = () => ({ mz: 1, tab: state.tab, day: state.day, sheets: state.sheets.slice() });
+  history.replaceState(snapView(), '');
+  const go = (fn) => {
+    fn();
+    history.pushState(snapView(), '');
+    render();
+  };
+  window.addEventListener('popstate', (e) => {
+    const v = e.state;
+    if (v && v.mz) {
+      state.tab = v.tab;
+      state.day = v.day;
+      state.sheets = v.sheets || [];
+      lsSet(LS.tab, state.tab);
+    } else {
+      // أول صفحة: الرجوع يقفل النوافذ ويرجع للملخص قبل ما يطلع
+      state.sheets = [];
+      state.tab = 'home';
+    }
+    render();
+  });
+
   /* ===== الأحداث ===== */
   $app.addEventListener('click', (e) => {
     const b = e.target.closest('[data-tab],[data-day],[data-act],[data-sheet],[data-go],[data-openday]');
     if (!b) return;
-    if (b.dataset.tab) (state.tab = b.dataset.tab), lsSet(LS.tab, state.tab), (state.sheets = []), window.scrollTo(0, 0);
-    if (b.dataset.go) (state.tab = b.dataset.go), lsSet(LS.tab, state.tab), window.scrollTo(0, 0);
-    if (b.dataset.day) state.day = b.dataset.day;
-    if (b.dataset.openday) (state.day = b.dataset.openday), (state.tab = 'invoices'), (state.sheets = []);
     if (b.dataset.act === 'refresh') return void load();
-    if (b.dataset.act === 'close') state.sheets = [];
-    if (b.dataset.act === 'back') state.sheets.pop();
+    // السد والرجوع بنفس طريق زر الرجوع حتى التاريخ يبقى مضبوط
+    if (b.dataset.act === 'close') return void (state.sheets.length ? history.go(-state.sheets.length) : null);
+    if (b.dataset.act === 'back') return void history.back();
+    if (b.dataset.tab) {
+      if (b.dataset.tab === state.tab && !state.sheets.length) return void window.scrollTo({ top: 0, behavior: 'smooth' });
+      return go(() => ((state.tab = b.dataset.tab), lsSet(LS.tab, state.tab), (state.sheets = []), window.scrollTo(0, 0)));
+    }
+    if (b.dataset.go) return go(() => ((state.tab = b.dataset.go), lsSet(LS.tab, state.tab), (state.sheets = []), window.scrollTo(0, 0)));
+    if (b.dataset.openday) return go(() => ((state.day = b.dataset.openday), (state.tab = 'invoices'), (state.sheets = [])));
+    if (b.dataset.day) {
+      state.day = b.dataset.day;
+      history.replaceState(snapView(), '');
+      return void render();
+    }
     if (b.dataset.sheet) {
       const x = { type: b.dataset.sheet };
       if (b.dataset.idx != null) x.idx = Number(b.dataset.idx);
@@ -461,7 +494,7 @@
       if (b.dataset.kind) x.kind = b.dataset.kind;
       if (b.dataset.i) x.i = Number(b.dataset.i);
       if (b.dataset.dayOf) x.day = b.dataset.dayOf;
-      state.sheets.push(x);
+      return go(() => state.sheets.push(x));
     }
     render();
   });

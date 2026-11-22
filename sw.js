@@ -1,5 +1,5 @@
 // يخلي التطبيق ينفتح حتى بلا نت (الصفحة نفسها من الذاكرة، والملخص الأخير محفوظ بالجهاز)
-const CACHE = 'mizan-phone-v2';
+const CACHE = 'mizan-phone-v3';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
