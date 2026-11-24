@@ -433,8 +433,8 @@
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (!vw || !vh) return null;
-    const cw = Math.round(vw * 0.8);
-    const ch = Math.round(vh * 0.5);
+    const cw = Math.round(vw * (cam.mode === 'link' ? 1 : 0.8));
+    const ch = Math.round(vh * (cam.mode === 'link' ? 1 : 0.5));
     const scale = Math.min(1, 900 / cw);
     canvas.width = Math.round(cw * scale);
     canvas.height = Math.round(ch * scale);
@@ -479,13 +479,20 @@
     cam.last = code;
     cam.lastAt = Date.now();
     const hit = byCode.get(code) || byCode.get(code.replace(/^0+/, ''));
+    if (cam.mode === 'link') {
+      if (applyLink(code)) return undefined;
+      beep(false);
+      return camMsg('هذا مو كود ربط ميزان', true);
+    }
     if (cam.mode === 'find') {
       beep(Boolean(hit));
       if (!hit) return camMsg(`ما لگيت دواء بهالباركود (${code})`, true);
       camStop();
-      state.sheets = state.sheets.filter((s) => s.type !== 'scan');
+      state.sheets = state.sheets.filter((s) => s.type !== 'scan').concat({ type: 'drug', id: hit.row[0] });
+      state.sheetAnim = true;
       history.replaceState(snapView(), '');
-      return openSheet({ type: 'drug', id: hit.row[0] });
+      render();
+      return void fetchInfo(hit.row[0]);
     }
     if (!hit) {
       beep(false);
@@ -1086,14 +1093,44 @@
   function welcome(msg, btn) {
     return `<div class="welcome"><img src="icon-512.png" alt="" /><h1>ميزان</h1><p>${msg}</p>${btn || ''}</div>`;
   }
+  // الربط: يمسح كود الحاسبة بكاميرا التطبيق، أو يلصق الرابط
+  function linkScreen() {
+    const live = Boolean(cam.stream) && cam.mode === 'link';
+    return `<div class="welcome" style="min-height:auto;padding-top:24px"><img src="icon-512.png" alt="" style="width:72px;height:72px" /><h1 style="font-size:24px">اربط ميزان</h1>
+      <p>بالبرنامج بالحاسبة: الإعدادات ← تطبيق الموبايل ← «اربط الموبايل». يطلع كود، امسحه من هنا:</p></div>
+      <div class="cam ${live ? 'live' : ''}" ${live ? 'data-cam' : ''} style="margin:8px 0 0;border-radius:22px;height:300px;padding-top:0">
+        ${live ? '<div class="cam-frame" aria-hidden="true" style="width:220px;height:220px;margin:-110px 0 0 -110px"><span class="c1"></span><span class="c2"></span><span class="c3"></span><span class="c4"></span></div><div class="cam-toast"></div>' : `<div class="cam-off" style="padding-top:20px">${ic('scan')}<div>${cam.error ? esc(cam.error) : cam.starting ? 'جاي يفتح الكاميرا...' : 'امسح كود الربط اللي على شاشة الحاسبة'}</div>${cam.starting ? '' : `<button class="btn" data-act="link-scan">${ic('cam')}امسح الكود</button>`}</div>`}
+      </div>
+      <div class="lbl" style="margin-top:20px"><span>أو الصق رابط الربط</span></div>
+      <div class="search-row"><label class="search" style="flex:1"><input id="linkin" placeholder="https://bassamjabar.github.io/mizan-phone/#t=..." dir="ltr" autocomplete="off" /></label><button class="btn sm" data-act="link-paste" style="height:48px">اربط</button></div>
+      ${state.linkErr ? `<div class="note red section">${ic('alert')}${esc(state.linkErr)}</div>` : ''}`;
+  }
+  function applyLink(text) {
+    const t = String(text || '').match(/t=([a-f0-9]{32,})/i);
+    const k = String(text || '').match(/k=([A-Za-z0-9._-]{20,})/);
+    if (!t || !k) return false;
+    lsSet(LS.token, t[1]);
+    lsSet(LS.key, k[1]);
+    camStop();
+    try {
+      navigator.storage && navigator.storage.persist && navigator.storage.persist();
+    } catch {
+      /* */
+    }
+    location.replace(location.pathname);
+    return true;
+  }
 
   function render() {
     if ((!TOKEN || !KEY) && !demo) {
-      $app.innerHTML = welcome('ملخص صيدليتك، والطلبات، والبيع بالكاميرا', `<ol><li>بالبرنامج بالحاسبة: الإعدادات ← تطبيق الموبايل ← «اربط الموبايل»</li><li>وجّه كاميرا الموبايل على الكود ودوس الرابط</li><li>آيفون: زر المشاركة ← «إضافة إلى الشاشة الرئيسية». أندرويد: ⋮ ← «تثبيت التطبيق»</li></ol>`);
+      if (video.parentNode) video.remove();
+      $app.innerHTML = linkScreen();
+      attachCam();
+      paintCamMsg();
       return;
     }
     if (!state.snap) {
-      $app.innerHTML = welcome(state.loading ? 'جاي يجيب الملخص...' : esc(state.error || 'ما وصل ملخص بعد. تأكد إن البرنامج بالحاسبة مفتوح وبيه نت'), state.loading ? '' : '<button class="btn" data-act="refresh">جرّب مرة ثانية</button>');
+      $app.innerHTML = welcome(state.loading ? 'جاي يجيب الملخص...' : esc(state.error || 'ما وصل ملخص بعد. تأكد إن البرنامج بالحاسبة مفتوح وبيه نت'), state.loading ? '' : '<button class="btn" data-act="refresh">جرّب مرة ثانية</button><button class="link" data-act="relink" style="margin-top:8px">اربط من جديد (امسح كود الحاسبة)</button>');
       return;
     }
     const focus = document.activeElement && document.activeElement.id;
@@ -1119,11 +1156,46 @@
   }
 
   /* ===== زر الرجوع مثل التطبيقات ===== */
-  const snapView = () => ({ mz: 3, tab: state.tab, day: state.day, more: state.more, sheets: state.sheets.map((s) => ({ type: s.type, id: s.id, idx: s.idx, day: s.day })) });
-  history.replaceState(snapView(), '');
-  const go = (fn) => {
-    fn();
+  /* التاريخ: [حارس] ← [التطبيق] ← (صفحة فرعية / نوافذ). التبويبات ما تنحط بالتاريخ (تتبدّل بمكانها)، فالرجوع:
+     نافذة ← تنسد. تبويب غير الرئيسية ← يرجع للرئيسية. بالرئيسية ← «اضغط مرة ثانية للخروج»، والثانية تطلع */
+  let depth = 0; // كم صفحة فوق التطبيق
+  let onGuard = false;
+  let guardT = null;
+  let pendingTab = null;
+  const snapView = () => ({ mz: 3, depth, tab: state.tab, day: state.day, more: state.more, sheets: state.sheets.map((s) => ({ type: s.type, id: s.id, idx: s.idx, day: s.day })) });
+  history.replaceState({ mz: 3, guard: true }, '');
+  history.pushState(snapView(), '');
+  const rearm = () => {
+    if (!onGuard) return;
+    onGuard = false;
+    clearTimeout(guardT);
+    const keep = state.sheets;
+    const more = state.more;
+    state.sheets = [];
+    state.more = null;
+    depth = 0;
     history.pushState(snapView(), '');
+    state.sheets = keep;
+    state.more = more;
+  };
+  // صفحة جديدة فوق (نافذة أو صفحة فرعية): الرجوع يسدها
+  const go = (fn) => {
+    rearm();
+    fn();
+    depth++;
+    history.pushState(snapView(), '');
+    render();
+  };
+  // تبديل التبويب: بمكانه (وإذا اكو نوافذ مفتوحة تنسد أول)
+  const switchTab = (fn) => {
+    rearm();
+    if (depth > 0) {
+      pendingTab = fn;
+      history.go(-depth);
+      return;
+    }
+    fn();
+    history.replaceState(snapView(), '');
     render();
   };
   function openSheet(x) {
@@ -1137,15 +1209,40 @@
   }
   window.addEventListener('popstate', (e) => {
     const v = e.state;
-    if (v && v.mz) {
+    if (pendingTab && v && v.mz && !v.guard) {
+      const fn = pendingTab;
+      pendingTab = null;
+      depth = 0;
+      state.sheets = [];
+      state.more = null;
+      fn();
+      history.replaceState(snapView(), '');
+      leaveCamIfNeeded();
+      return void render();
+    }
+    pendingTab = null;
+    if (!v || v.guard) {
+      // رجوع من مستوى التطبيق
+      depth = 0;
+      state.sheets = [];
+      if (state.tab !== 'home' || state.more) {
+        state.tab = 'home';
+        state.more = null;
+        lsSet(LS.tab, 'home');
+        history.pushState(snapView(), '');
+      } else {
+        // بالرئيسية: نبقى على الحارس ثانيتين — رجوع ثاني يطلع من التطبيق
+        onGuard = true;
+        toast('اضغط رجوع مرة ثانية للخروج');
+        clearTimeout(guardT);
+        guardT = setTimeout(rearm, 2200);
+      }
+    } else {
+      depth = v.depth || 0;
       state.tab = v.tab;
       state.day = v.day;
       state.more = v.more || null;
       state.sheets = v.sheets || [];
-    } else {
-      state.sheets = [];
-      state.more = null;
-      state.tab = 'home';
     }
     if (!state.sheets.some((s) => s.type === 'checkout')) state.co = state.co && (state.co.phase === 'wait' || state.co.phase === 'sending') ? state.co : null;
     leaveCamIfNeeded();
@@ -1159,6 +1256,21 @@
     if (!b) return;
     const ds = b.dataset;
     if (ds.act === 'refresh') return void load();
+    if (ds.act === 'link-scan') return void camStart('link');
+    if (ds.act === 'relink') {
+      lsSet(LS.token, null);
+      lsSet(LS.key, null);
+      lsSet(LS.snap, null);
+      return void location.replace(location.pathname);
+    }
+    if (ds.act === 'link-paste') {
+      const v = (document.getElementById('linkin') || {}).value || '';
+      if (!applyLink(v)) {
+        state.linkErr = 'الرابط مو صحيح. انسخه من البرنامج: الإعدادات ← تطبيق الموبايل ← «انسخ الرابط»';
+        render();
+      }
+      return undefined;
+    }
     if (ds.act === 'install' && installEvt) {
       installEvt.prompt();
       installEvt.userChoice.finally(() => ((installEvt = null), render()));
@@ -1169,10 +1281,10 @@
       if (state.sheets.some((s) => s.type === 'scan')) camStop();
       return void closeSheets();
     }
-    if (ds.act === 'back') return void history.back();
+    if (ds.act === 'back') return void (depth > 0 ? history.back() : switchTab(() => ((state.more = null), (state.sheets = []))));
     if (ds.tab) {
       if (ds.tab === state.tab && !state.sheets.length && !state.more) return void window.scrollTo({ top: 0, behavior: 'smooth' });
-      go(() => {
+      switchTab(() => {
         state.tab = ds.tab;
         state.more = null;
         state.sheets = [];
@@ -1185,8 +1297,11 @@
       return undefined;
     }
     if (ds.more) return go(() => ((state.tab = 'more'), (state.more = ds.more), (state.sheets = []), window.scrollTo(0, 0)));
-    if (ds.stock) return go(() => ((state.tab = 'stock'), (state.filter = ds.stock), (state.limit = 60), (state.sheets = []), window.scrollTo(0, 0)));
-    if (ds.openday) return go(() => ((state.day = ds.openday), (state.tab = 'more'), (state.more = 'invoices'), (state.sheets = [])));
+    if (ds.stock) return switchTab(() => ((state.tab = 'stock'), (state.filter = ds.stock), (state.limit = 60), (state.sheets = []), window.scrollTo(0, 0)));
+    if (ds.openday) {
+      state.day = ds.openday;
+      return switchTab(() => ((state.tab = 'more'), (state.more = 'invoices'), (state.sheets = [])));
+    }
     if (ds.day) {
       state.day = ds.day;
       history.replaceState(snapView(), '');
@@ -1251,7 +1366,7 @@
     }
     if (ds.act === 'sale-close') {
       camStop();
-      return go(() => ((state.tab = lsGet(LS.tab) && lsGet(LS.tab) !== 'sale' ? lsGet(LS.tab) : 'home'), (state.sheets = [])));
+      return switchTab(() => ((state.tab = lsGet(LS.tab) && lsGet(LS.tab) !== 'sale' ? lsGet(LS.tab) : 'home'), (state.sheets = [])));
     }
     if (ds.add) {
       const r = catRow(ds.add);
@@ -1263,7 +1378,7 @@
     if (ds.sell) {
       const r = catRow(ds.sell);
       if (r) addToCart(r, 0);
-      return go(() => ((state.tab = 'sale'), (state.sheets = []), window.scrollTo(0, 0)));
+      return switchTab(() => ((state.tab = 'sale'), (state.sheets = []), window.scrollTo(0, 0)));
     }
     if (ds.qty) {
       const l = state.cart.find((x) => x.key === ds.qty);
@@ -1362,4 +1477,9 @@
     else if (cam.stream) (camStop(), render());
   });
   if ('serviceWorker' in navigator && !demo) navigator.serviceWorker.register('sw.js').catch(() => {});
+  try {
+    if (TOKEN && navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  } catch {
+    /* */
+  }
 })();
