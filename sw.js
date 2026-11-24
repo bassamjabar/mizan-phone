@@ -1,6 +1,6 @@
 // يخلي التطبيق ينفتح حتى بلا نت (الصفحة نفسها من الذاكرة، والملخص الأخير محفوظ بالجهاز)
-const CACHE = 'mizan-phone-v4';
-const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+const CACHE = 'mizan-phone-v5';
+const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'vendor/zxing-0.21.3.min.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
