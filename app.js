@@ -45,7 +45,7 @@
   const state = {
     snap: null,
     updated: null,
-    tab: TABS.includes(lsGet(LS.tab)) && lsGet(LS.tab) !== 'sale' ? lsGet(LS.tab) : 'home',
+    tab: /[?&]tab=orders/.test(location.search) ? 'orders' : TABS.includes(lsGet(LS.tab)) && lsGet(LS.tab) !== 'sale' ? lsGet(LS.tab) : 'home',
     day: 'today',
     more: null,
     loading: false,
@@ -146,6 +146,7 @@
     star: P('<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>'),
     phone: P('<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/>'),
     undo: P('<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>'),
+    bell: P('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
   };
   const ic = (n) => `<i class="ic">${ICON[n] || ''}</i>`;
 
@@ -628,6 +629,61 @@
       }`;
   }
 
+  /* ===== إشعارات الطلبات (Web Push) ===== */
+  const pushState = { busy: false, err: '' };
+  const pushOk = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const pushOn = () => lsGet('mz_push') === '1' && pushOk() && Notification.permission === 'granted';
+  function b64u(str) {
+    const pad = '='.repeat((4 - (str.length % 4)) % 4);
+    const raw = atob((str + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+  async function setPush(on) {
+    if (demo) return toast('بالتجربة ما تشتغل الإشعارات');
+    pushState.busy = true;
+    pushState.err = '';
+    render();
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (on) {
+        if (!snap().push_key) throw new Error('حدّث البرنامج بالحاسبة لآخر نسخة أول');
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') throw new Error('ما سمحت بالإشعارات. من إعدادات الموبايل اسمح لتطبيق ميزان بالإشعارات');
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(snap().push_key) });
+        await rpc('mizan_phone_set_push', { p_token: TOKEN, p_sub: sub.toJSON(), p_on: true });
+        lsSet('mz_push', '1');
+        toast('انفعلت الإشعارات. أي طلب دواء يوصلك إشعار');
+      } else {
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          await rpc('mizan_phone_set_push', { p_token: TOKEN, p_sub: sub.toJSON(), p_on: false }).catch(() => {});
+          await sub.unsubscribe().catch(() => {});
+        }
+        lsSet('mz_push', '0');
+        toast('انطفت الإشعارات');
+      }
+    } catch (e) {
+      pushState.err = /Could not find|PGRST202|mizan_phone_set_push/.test(e.message) ? 'الإشعارات تحتاج سكربت «تطبيق الموبايل v4» بسوبابيس' : e.message;
+    } finally {
+      pushState.busy = false;
+      render();
+    }
+  }
+  function pushCard() {
+    if (pushOn()) return '';
+    let inner;
+    if (!pushOk()) inner = isIOS && !standalone() ? 'حتى توصلك إشعارات الطلبات: ثبّت التطبيق على الشاشة الرئيسية (زر المشاركة ← «إضافة إلى الشاشة الرئيسية») وافتحه من أيقونته' : 'هذا المتصفح ما يدعم الإشعارات';
+    else if (Notification.permission === 'denied') inner = 'الإشعارات مسدودة. من إعدادات الموبايل ← التطبيقات ← ميزان (أو كروم) ← الإشعارات: اسمح';
+    else inner = null;
+    return `<div class="card req" style="margin-top:12px">
+      <div class="top"><b style="display:flex;align-items:center;gap:8px"><span class="badge-ic b" style="width:30px;height:30px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center">${ic('bell')}</span>إشعار لكل طلب دواء</b></div>
+      <div class="meta" style="align-items:flex-start">${inner ? esc(inner) : 'لما الصيدلي يطلب دواء من البرنامج، يوصلك إشعار على الموبايل حتى لو التطبيق مسدود'}</div>
+      ${pushState.err ? `<div class="note red">${ic('alert')}${esc(pushState.err)}</div>` : ''}
+      ${inner ? '' : `<div class="acts"><button class="btn" data-act="push-on" ${pushState.busy ? 'disabled' : ''}>${pushState.busy ? 'لحظة...' : 'فعّل الإشعارات'}</button></div>`}
+    </div>`;
+  }
+
   /* ===== الطلبات ===== */
   const reqTitle = (r) => (r.pid ? r.name : String(r.name).includes('\n') ? 'مو موجودة بالمخزن' : r.name);
   function reqPill(r) {
@@ -659,8 +715,9 @@
     const list = by(state.ordTab);
     const label = { new: 'جديدة', ordered: 'انطلبت', arrived: 'وصلت' };
     return `
-      <div class="head"><h1 class="grow">الطلبات</h1><button class="iconbtn primary" data-sheet="newreq" aria-label="طلب جديد">${ic('plus')}</button></div>
-      <div class="seg">${['new', 'ordered', 'arrived'].map((k) => `<button class="${state.ordTab === k ? 'on' : ''}" data-ord="${k}">${label[k]}${by(k).length ? ` · ${by(k).length}` : ''}</button>`).join('')}</div>
+      <div class="head"><h1 class="grow">الطلبات</h1>${pushOn() ? `<button class="iconbtn ghost" data-act="push-off" aria-label="طفّي الإشعارات" title="الإشعارات مفعّلة (دوس حتى تطفيها)" style="color:var(--green)">${ic('bell')}</button>` : ''}<button class="iconbtn primary" data-sheet="newreq" aria-label="طلب جديد">${ic('plus')}</button></div>
+      ${pushCard()}
+      <div class="seg" style="margin-top:12px">${['new', 'ordered', 'arrived'].map((k) => `<button class="${state.ordTab === k ? 'on' : ''}" data-ord="${k}">${label[k]}${by(k).length ? ` · ${by(k).length}` : ''}</button>`).join('')}</div>
       ${list.length ? list.map(reqCard).join('') : `<div class="empty">${ic('orders')}<b>${state.ordTab === 'new' ? 'ما اكو طلبات جديدة' : state.ordTab === 'ordered' ? 'ما اكو شي انطلب وينتظر' : 'ما وصل شي آخر 7 أيام'}</b><small>${state.ordTab === 'new' ? 'لما الصيدلي يضغط «طلب» يم الدواء بالبرنامج، يوصل هنا' : ''}</small></div>`}`;
   }
 
@@ -974,17 +1031,49 @@
     if (co.shake) setTimeout(() => ((co.shake = false), render()), 400);
   }
 
+  // دليل أسماء الأدوية (24 ألف): ينحمّل أول مرة تنفتح نافذة الطلب
+  let guide = null;
+  let guideLoading = false;
+  function loadGuide() {
+    if (guide || guideLoading) return;
+    guideLoading = true;
+    fetch('vendor/drug-names.json')
+      .then((r) => r.json())
+      .then((list) => {
+        guide = list.map((name) => [name, norm(name)]);
+        if (state.sheets.some((x) => x.type === 'newreq')) render();
+      })
+      .catch(() => {})
+      .finally(() => (guideLoading = false));
+  }
+  function guideSearch(q, limit = 8) {
+    if (!guide || q.length < 2) return [];
+    const words = q.split(' ').filter(Boolean);
+    const starts = [];
+    const other = [];
+    for (const [name, n] of guide) {
+      if (n.startsWith(q)) starts.push(name);
+      else if (words.every((w) => n.includes(w))) other.push(name);
+      if (starts.length >= limit) break;
+    }
+    const byLen = (a, b) => a.length - b.length;
+    return [...starts.sort(byLen), ...other.sort(byLen)].slice(0, limit);
+  }
   function newReqSheet() {
+    loadGuide();
     const q = norm(state.rq || '');
-    const found = q ? ((snap().stock && snap().stock.all) || []).filter((r) => norm(r[1]).includes(q)).slice(0, 6) : [];
+    const inStock = q.length >= 2 ? ((snap().stock && snap().stock.all) || []).filter((r) => norm(r[1]).includes(q)).slice(0, 4) : [];
+    const have = new Set(inStock.map((r) => norm(r[1])));
+    const sugg = guideSearch(q).filter((n) => !have.has(norm(n)) && !(state.reqNames || []).includes(n));
+    const list = state.reqNames || [];
     return [
       'طلب جديد',
-      `<div class="lbl"><span>دواء موجود بالمخزن</span></div>
-       <label class="search">${ic('search')}<input id="rq" value="${esc(state.rq || '')}" placeholder="ابحث عن الدواء" autocomplete="off" /></label>
-       ${found.length ? `<div class="box section" style="padding:0 12px">${found.map((r) => `<button class="row" style="padding:10px 2px" data-reqdrug="${r[0]}"><span class="two"><b class="ell">${esc(r[1])}</b><small class="num">${esc(qText(r))}</small></span><span class="pill blue">اطلب</span></button>`).join('')}</div>` : ''}
-       <div class="lbl"><span>أو أدوية مو موجودة (كل اسم بسطر)</span></div>
-       <textarea class="input" id="names" rows="4" dir="auto" placeholder="مثلاً:&#10;اوغمنتين 1غ&#10;نيكسيوم 40">${esc(state.names || '')}</textarea>`,
-      '<button class="btn wide" data-act="send-names">اطلب</button>',
+      `<label class="search">${ic('search')}<input id="rq" value="${esc(state.rq || '')}" placeholder="اكتب أول حرفين من اسم الدواء" autocomplete="off" enterkeyhint="done" /></label>
+       ${inStock.length ? `<div class="lbl"><span>موجود بالمخزن</span></div><div class="box" style="padding:0 12px">${inStock.map((r) => `<button class="row" style="padding:10px 2px" data-reqdrug="${r[0]}"><span class="two"><b class="ell">${esc(r[1])}</b><small class="num">${esc(qText(r))}</small></span><span class="pill blue">اطلب</span></button>`).join('')}</div>` : ''}
+       ${sugg.length ? `<div class="lbl"><span>من دليل الأدوية</span></div><div class="box" style="padding:0 12px">${sugg.map((n) => `<button class="row" style="padding:10px 2px;min-height:48px" data-addname="${esc(n)}"><span class="two"><b class="ell" dir="auto">${esc(n)}</b></span><span class="pill gray">${ic('plus')}</span></button>`).join('')}</div>` : q.length >= 2 && !guide ? '<div class="loading-line"></div>' : ''}
+       ${q.length >= 2 && !sugg.length && !inStock.length && guide ? `<button class="btn soft wide section" data-addname="${esc(state.rq.trim())}">أضف «${esc(state.rq.trim())}» للطلب</button>` : ''}
+       ${list.length ? `<div class="lbl"><span>أدوية مو موجودة بهالطلب (${list.length})</span></div><div class="pills" style="gap:8px">${list.map((n) => `<button class="pill blue" style="font-size:13px;padding:7px 12px" data-rmname="${esc(n)}">${esc(n)} ✕</button>`).join('')}</div>` : ''}`,
+      `<button class="btn wide" data-act="send-names" ${list.length ? '' : 'disabled'}>اطلب${list.length ? ` (${list.length})` : ''}</button>`,
     ];
   }
 
@@ -1257,6 +1346,8 @@
     const ds = b.dataset;
     if (ds.act === 'refresh') return void load();
     if (ds.act === 'link-scan') return void camStart('link');
+    if (ds.act === 'push-on') return void setPush(true);
+    if (ds.act === 'push-off') return void setPush(false);
     if (ds.act === 'relink') {
       lsSet(LS.token, null);
       lsSet(LS.key, null);
@@ -1340,12 +1431,19 @@
       if (state.sheets.some((s) => s.type === 'newreq')) (state.rq = ''), closeSheets();
       return undefined;
     }
+    if (ds.addname != null) {
+      const n = String(ds.addname).trim();
+      if (n) state.reqNames = [...new Set([...(state.reqNames || []), n])];
+      state.rq = '';
+      return void render();
+    }
+    if (ds.rmname != null) return void ((state.reqNames = (state.reqNames || []).filter((x) => x !== ds.rmname)), render());
     if (ds.act === 'send-names') {
-      const names = String(state.names || '').trim();
-      if (!names) return void toast('اكتب اسم الدواء', true);
+      const names = (state.reqNames || []).join('\n');
+      if (!names) return void toast('اختار دواء', true);
       push('request', { names }).then(
         () => {
-          state.names = '';
+          state.reqNames = [];
           toast('انرسل الطلب. يبين بالطلبات خلال ثواني');
           setTimeout(load, 4000);
         },
@@ -1462,6 +1560,18 @@
       }
     }
   });
+  // طلب جديد: Enter يضيف الاسم المكتوب (حتى لو مو بالدليل)
+  $app.addEventListener('keydown', (e) => {
+    if (e.target.id === 'rq' && e.key === 'Enter') {
+      e.preventDefault();
+      const n = String(state.rq || '').trim();
+      if (n.length >= 2) {
+        state.reqNames = [...new Set([...(state.reqNames || []), n])];
+        state.rq = '';
+        render();
+      }
+    }
+  });
   $app.addEventListener('change', (e) => {
     if (e.target.dataset.qin) render();
   });
@@ -1477,6 +1587,13 @@
     else if (cam.stream) (camStop(), render());
   });
   if ('serviceWorker' in navigator && !demo) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator)
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data && e.data.mz === 'open' && e.data.tab) {
+        switchTab(() => ((state.tab = e.data.tab), (state.more = null), (state.sheets = [])));
+        load();
+      }
+    });
   try {
     if (TOKEN && navigator.storage && navigator.storage.persist) navigator.storage.persist();
   } catch {
